@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/samber/mo"
@@ -16,23 +18,28 @@ import (
 var (
 	ErrInvalidTitle  = errors.New("title must not be empty")
 	ErrInvalidStatus = errors.New("invalid status")
+	ErrTaskNotFound  = errors.New("task not found")
 )
 
 type Service struct {
-	repo      port.Repository
-	publisher port.Publisher
+	writeBus port.Publisher
+	readBus  port.ReadBus
 }
 
 var _ port.UseCase = (*Service)(nil)
 
-func NewService(repo port.Repository, publisher port.Publisher) *Service {
-	return &Service{repo: repo, publisher: publisher}
+func NewService(writeBus port.Publisher, readBus port.ReadBus) *Service {
+	return &Service{
+		writeBus: writeBus,
+		readBus:  readBus,
+	}
 }
 
 func validateTitle(title string) error {
-	if title == "" {
+	if strings.TrimSpace(title) == "" {
 		return ErrInvalidTitle
 	}
+
 	return nil
 }
 
@@ -40,43 +47,118 @@ func validateStatus(s domain.Status) error {
 	switch s {
 	case domain.StatusPending, domain.StatusInProgress, domain.StatusDone:
 		return nil
+	default:
+		return ErrInvalidStatus
 	}
-	return ErrInvalidStatus
 }
 
 func (s *Service) CreateTask(ctx context.Context, title string) mo.Result[domain.Task] {
 	if err := validateTitle(title); err != nil {
 		return mo.Err[domain.Task](err)
 	}
-	id := bson.NewObjectID()
-	if result := s.repo.Append(ctx, id, domain.EventCreated, domain.TaskCreatedPayload{Title: title}); result.IsError() {
-		return mo.Err[domain.Task](result.Error())
+
+	now := time.Now().UTC()
+
+	task := domain.Task{
+		ID:        bson.NewObjectID(),
+		Title:     title,
+		Status:    domain.StatusPending,
+		CreatedAt: now,
 	}
-	task := domain.Task{ID: id, Title: title, Status: domain.StatusPending, CreatedAt: time.Now()}
-	s.publisher.Publish(ctx, event.Event{Type: domain.EventCreated, Payload: task})
+
+	err := s.writeBus.Publish(ctx, event.Event{
+		Type:     domain.EventCreated,
+		EntityID: task.ID.Hex(),
+		Payload: domain.TaskCreatedPayload{
+			Title: task.Title,
+		},
+		CreatedAt: now,
+	})
+	if err != nil {
+		return mo.Err[domain.Task](err)
+	}
+
 	return mo.Ok(task)
 }
 
 func (s *Service) ListTasks(ctx context.Context) mo.Result[[]domain.Task] {
-	return s.repo.FindAll(ctx)
+	records := s.readBus.All()
+
+	tasks := make([]domain.Task, 0, len(records))
+
+	for _, record := range records {
+		task, ok := record.State.(domain.Task)
+		if !ok {
+			return mo.Err[[]domain.Task](
+				fmt.Errorf("invalid task state for entity_id %s", record.EntityID),
+			)
+		}
+
+		tasks = append(tasks, task)
+	}
+
+	return mo.Ok(tasks)
 }
 
 func (s *Service) GetTask(ctx context.Context, id bson.ObjectID) mo.Result[domain.Task] {
-	return s.repo.FindByID(ctx, id)
+	record, ok := s.readBus.Get(id.Hex())
+	if !ok {
+		return mo.Err[domain.Task](ErrTaskNotFound)
+	}
+
+	task, ok := record.State.(domain.Task)
+	if !ok {
+		return mo.Err[domain.Task](
+			fmt.Errorf("invalid task state for entity_id %s", id.Hex()),
+		)
+	}
+
+	return mo.Ok(task)
 }
 
-func (s *Service) ChangeStatus(ctx context.Context, id bson.ObjectID, status domain.Status) mo.Result[domain.Task] {
+func (s *Service) ChangeStatus(
+	ctx context.Context,
+	id bson.ObjectID,
+	status domain.Status,
+) mo.Result[domain.Task] {
 	if err := validateStatus(status); err != nil {
 		return mo.Err[domain.Task](err)
 	}
-	current := s.repo.FindByID(ctx, id)
-	if current.IsError() {
-		return mo.Err[domain.Task](current.Error())
+
+	current, ok := s.readBus.Get(id.Hex())
+	if !ok {
+		return mo.Err[domain.Task](ErrTaskNotFound)
 	}
-	next := current.MustGet().ChangeStatus(status)
-	if result := s.repo.Append(ctx, id, domain.EventStatusChanged, domain.StatusChangedPayload{Status: status}); result.IsError() {
-		return mo.Err[domain.Task](result.Error())
+
+	if _, ok := current.State.(domain.Task); !ok {
+		return mo.Err[domain.Task](
+			fmt.Errorf("invalid task state for entity_id %s", id.Hex()),
+		)
 	}
-	s.publisher.Publish(ctx, event.Event{Type: domain.EventStatusChanged, Payload: next})
-	return mo.Ok(next)
+
+	err := s.writeBus.Publish(ctx, event.Event{
+		Type:     domain.EventStatusChanged,
+		EntityID: id.Hex(),
+		Payload: domain.StatusChangedPayload{
+			Status: status,
+		},
+		CreatedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		return mo.Err[domain.Task](err)
+	}
+
+	record, ok := s.readBus.Get(id.Hex())
+	if !ok {
+		return mo.Err[domain.Task](ErrTaskNotFound)
+	}
+
+	task, ok := record.State.(domain.Task)
+	if !ok {
+		return mo.Err[domain.Task](
+			fmt.Errorf("invalid task state for entity_id %s", id.Hex()),
+		)
+	}
+
+	return mo.Ok(task)
 }

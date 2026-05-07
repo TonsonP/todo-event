@@ -41,6 +41,91 @@ func (r *MongoRepository) collection() (*mongo.Collection, error) {
 	return either.MustRight().Database("todoe").Collection("task_events"), nil
 }
 
+func (r *MongoRepository) readCollection() (*mongo.Collection, error) {
+	either := r.getClient()
+	if either.IsLeft() {
+		return nil, either.MustLeft()
+	}
+	return either.MustRight().Database("todoe").Collection("tasks_read"), nil
+}
+
+func (r *MongoRepository) UpsertReadModel(ctx context.Context, task domain.Task) error {
+	col, err := r.readCollection()
+	if err != nil {
+		return err
+	}
+
+	now := time.Now().UTC()
+
+	_, err = col.UpdateOne(
+		ctx,
+		bson.D{{Key: "_id", Value: task.ID}},
+		bson.D{
+			{
+				Key: "$set",
+				Value: bson.D{
+					{Key: "entity_id", Value: task.ID.Hex()},
+					{Key: "title", Value: task.Title},
+					{Key: "status", Value: task.Status},
+					{Key: "created_at", Value: task.CreatedAt},
+					{Key: "updated_at", Value: now},
+				},
+			},
+			{
+				Key: "$setOnInsert",
+				Value: bson.D{
+					{Key: "_id", Value: task.ID},
+				},
+			},
+		},
+		options.UpdateOne().SetUpsert(true),
+	)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *MongoRepository) FindReadModelByID(ctx context.Context, id bson.ObjectID) mo.Result[domain.Task] {
+	col, err := r.readCollection()
+	if err != nil {
+		return mo.Err[domain.Task](err)
+	}
+
+	var task domain.Task
+
+	err = col.FindOne(
+		ctx,
+		bson.D{{Key: "_id", Value: id}},
+	).Decode(&task)
+	if err != nil {
+		return mo.Err[domain.Task](err)
+	}
+
+	return mo.Ok(task)
+}
+
+func (r *MongoRepository) FindAllReadModels(ctx context.Context) mo.Result[[]domain.Task] {
+	col, err := r.readCollection()
+	if err != nil {
+		return mo.Err[[]domain.Task](err)
+	}
+
+	cursor, err := col.Find(ctx, bson.D{})
+	if err != nil {
+		return mo.Err[[]domain.Task](err)
+	}
+	defer cursor.Close(ctx)
+
+	var tasks []domain.Task
+	if err := cursor.All(ctx, &tasks); err != nil {
+		return mo.Err[[]domain.Task](err)
+	}
+
+	return mo.Ok(tasks)
+}
+
 func (r *MongoRepository) Append(ctx context.Context, aggregateID bson.ObjectID, eventType string, payload any) mo.Result[struct{}] {
 	col, err := r.collection()
 	if err != nil {
@@ -108,7 +193,7 @@ func (r *MongoRepository) FindAll(ctx context.Context) mo.Result[[]domain.Task] 
 	var tasks []domain.Task
 	for cursor.Next(ctx) {
 		var group struct {
-			AggregateID bson.ObjectID       `bson:"_id"`
+			AggregateID bson.ObjectID        `bson:"_id"`
 			Events      []domain.StoredEvent `bson:"events"`
 		}
 		if err := cursor.Decode(&group); err != nil {

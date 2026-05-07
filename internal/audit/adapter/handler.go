@@ -12,11 +12,17 @@ import (
 
 func NewAuditHandler(repo *MongoRepository) func(context.Context, event.Event) error {
 	return func(ctx context.Context, e event.Event) error {
+		createdAt := e.CreatedAt
+		if createdAt.IsZero() {
+			createdAt = time.Now().UTC()
+		}
+
 		entry := domain.AuditEntry{
 			ID:        bson.NewObjectID(),
+			EntityID:  e.EntityID,
 			EventType: e.Type,
 			Payload:   e.Payload,
-			CreatedAt: time.Now(),
+			CreatedAt: createdAt,
 		}
 		result := repo.Save(ctx, entry)
 		if result.IsError() {
