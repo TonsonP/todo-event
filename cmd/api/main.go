@@ -41,9 +41,13 @@ func main() {
 
 	bus := event.NewEventBus()
 	auditRepo := auditadapter.NewMongoRepository(clientIO)
-	auditHandler := auditadapter.NewAuditHandler(auditRepo)
+	// auditHandler := auditadapter.NewAuditHandler(auditRepo)
+	auditHandler := auditadapter.NewAuditHandlerWithRetry(auditRepo, "audit_fallback.jsonl")
 
-	taskRepo := taskadapter.NewMongoRepository(clientIO)
+	mongoTaskRepo := taskadapter.NewMongoRepository(clientIO)
+	taskFallbackRepo := taskadapter.NewFileFallbackRepository("task_fallback.jsonl")
+	taskRepo := taskadapter.NewResilientRepository(mongoTaskRepo, taskFallbackRepo)
+
 	taskService := taskapplication.NewService(taskRepo, bus)
 	taskHandler := taskhttp.NewHandler(taskService)
 
@@ -53,7 +57,6 @@ func main() {
 	bus.Subscribe(taskdomain.EventCreated, auditHandler)
 	bus.Subscribe(taskdomain.EventStatusChanged, auditHandler)
 	bus.Subscribe(taskdomain.EventStatusCompleted, auditHandler)
-
 	bus.Subscribe(taskdomain.EventStatusCompleted, csvHandler)
 	// bus.Subscribe(taskdomain.EventStatusCompleted, taskHandler)
 
