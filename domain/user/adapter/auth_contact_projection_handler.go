@@ -3,32 +3,23 @@ package adapter
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
-	"todoe/domain/user/domain"
+
 	userv1 "todoe/gen/user/v1"
 	"todoe/internal/event"
 )
 
-func NewProjectionHandler(repo *MySQLRepository) func(context.Context, event.Event) error {
-	return func(ctx context.Context, e event.Event) error {
-		user, ok := e.Payload.(domain.User)
-		if !ok {
-			return fmt.Errorf("unexpected payload type %T", e.Payload)
-		}
-		result := repo.Upsert(ctx, user)
-		if result.IsError() {
-			return result.Error()
-		}
-		return nil
-	}
+type ContactUpdatedEventPayload struct {
+	UserID string `json:"user_id"`
 }
 
-func NewAuthCredentialProjectionHandler(
+func NewAuthContactUpdatedProjectionHandler(
 	repo *AuthCredentialMongoRepository,
 	userClient userv1.UserServiceClient,
 ) func(context.Context, event.Event) error {
 	return func(ctx context.Context, e event.Event) error {
-		payload, ok := e.Payload.(domain.ContactUpdatedPayload)
+		payload, ok := e.Payload.(ContactUpdatedEventPayload)
 		if !ok {
 			return fmt.Errorf("unexpected payload type %T", e.Payload)
 		}
@@ -43,15 +34,21 @@ func NewAuthCredentialProjectionHandler(
 		userResp, err := userClient.GetUser(grpcCtx, &userv1.GetUserRequest{
 			UserId: payload.UserID,
 		})
-		fmt.Println(userResp)
 		if err != nil {
-			return fmt.Errorf("grpc get user: %w", err)
+			return fmt.Errorf("get user via grpc: %w", err)
 		}
+
+		fmt.Println(userResp)
 
 		result := repo.UpdateContact(ctx, userResp.UserId, userResp.Email)
 		if result.IsError() {
 			return result.Error()
 		}
+
+		slog.Info("auth credential synced from user service",
+			"user_id", userResp.UserId,
+			"email", userResp.Email,
+		)
 
 		return nil
 	}

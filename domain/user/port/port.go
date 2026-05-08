@@ -21,6 +21,7 @@ type UseCase interface {
 }
 
 type Repository interface {
+	Upsert(ctx context.Context, user domain.User) mo.Result[struct{}]
 	Append(ctx context.Context, aggregateID, eventType string, payload any) mo.Result[struct{}]
 	FindByID(ctx context.Context, id string) mo.Result[domain.User]
 	FindByEmail(ctx context.Context, email string) mo.Result[domain.User]
