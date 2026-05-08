@@ -46,7 +46,7 @@ func fakeCreditScore(email string) (int, bool) {
 func main() {
 	mysqlDSN := os.Getenv("MYSQL_DSN")
 	if mysqlDSN == "" {
-		mysqlDSN = "todoe:todoe@tcp(localhost:3306)/todoe_onboarding?parseTime=true&multiStatements=true"
+		mysqlDSN = "todoe:todoe@tcp(localhost:3307)/todoe_onboarding?parseTime=true&multiStatements=true"
 	}
 	mongoURI := os.Getenv("MONGO_URI")
 	if mongoURI == "" {
@@ -146,6 +146,11 @@ func main() {
 		return nil
 	})
 
+	authCredentialRepo := useradapter.NewAuthCredentialMongoRepository(mongoClientIO)
+	authCredentialProjection := useradapter.NewAuthCredentialProjectionHandler(authCredentialRepo)
+
+	userBus.Subscribe(userdomain.EventContactUpdated, authCredentialProjection)
+
 	// ── Captcha domain ───────────────────────────────────────────────────
 	captchaBus := event.NewEventBus()
 	captchaRepo := captchaadapter.NewMongoRepository(mongoClientIO)
@@ -157,6 +162,8 @@ func main() {
 
 	// ── HTTP ─────────────────────────────────────────────────────────────
 	app := fiber.New()
+
+	app.Post("/api/users/:id/verify-email", userHandler.VerifyEmail) // Temp fix
 
 	app.Post("/users/register", userHandler.Register)
 	app.Get("/users/activated", userHandler.ListActivated)

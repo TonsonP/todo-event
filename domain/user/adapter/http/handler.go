@@ -40,6 +40,7 @@ func (h *Handler) VerifyEmail(c *fiber.Ctx) error {
 	if id == "" {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "missing id"})
 	}
+	println(id)
 	var body struct {
 		Token string `json:"token"`
 	}

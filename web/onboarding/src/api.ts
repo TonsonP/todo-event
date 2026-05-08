@@ -20,6 +20,9 @@ export async function register(name: string, email: string): Promise<User> {
 }
 
 export async function verifyEmail(id: string, token: string): Promise<User> {
+   const url = `${BASE}/users/${id}/verify-email`
+  console.log("verifyEmail id:", id)
+  console.log("verifyEmail url:", url)
   return handle(await fetch(`${BASE}/users/${id}/verify-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
